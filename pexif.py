@@ -93,15 +93,15 @@ except AttributeError:
 
 """
 
-import StringIO
+import io
 import sys
 from struct import unpack, pack
 
 MAX_HEADER_SIZE = 64 * 1024
 DELIM = 0xff
 EOI = 0xd9
-SOI_MARKER = chr(DELIM) + '\xd8'
-EOI_MARKER = chr(DELIM) + '\xd9'
+SOI_MARKER = b'\xff\xd8'
+EOI_MARKER = b'\xff\xd9'
 
 TIFF_OFFSET = 6
 TIFF_TAG = 0x2a
@@ -122,9 +122,17 @@ def debug(*debug_string):
     DEBUG to 1."""
     if DEBUG:
         for each in debug_string:
-            print each,
-        print
+            print(each, end=' ')
+        print()
 
+
+def bstrip(b):
+    if b:
+        index = len(b) - 1
+        while index >= 0 and b[index] != b'\0':
+            index -= 1
+        return b[0:index - 1]
+    return b
 
 class DefaultSegment:
     """DefaultSegment represents a particluar segment of a JPEG file.
@@ -180,8 +188,8 @@ class DefaultSegment:
         """This is called by JpegFile.dump() to output a human readable
         representation of the segment. Subclasses should overload this to provide
         extra information."""
-        print >> fd, " Section: [%5s] Size: %6d" % \
-            (jpeg_markers[self.marker][0], len(self.data))
+        print(" Section: [%5s] Size: %6d" % \
+            (jpeg_markers[self.marker][0], len(self.data)), file=fd)
 
 
 class StartOfScanSegment(DefaultSegment):
@@ -218,8 +226,8 @@ class StartOfScanSegment(DefaultSegment):
 
     def dump(self, fd):
         """Dump as ascii readable data to a given file object"""
-        print >> fd, " Section: [  SOS] Size: %6d Image data size: %6d" % \
-            (len(self.data), len(self.img_data))
+        print(" Section: [  SOS] Size: %6d Image data size: %6d" % \
+            (len(self.data), len(self.img_data)), file=fd)
 
 
 class ExifType:
@@ -296,12 +304,12 @@ class IfdData(object):
         return self[key] is not None
 
     def __setattr__(self, name, value):
-        for key, entry in self.tags.items():
+        for key, entry in list(self.tags.items()):
             if entry[1] == name:
                 self[key] = value
                 return
 
-        for key, entry in self.embedded_tags.items():
+        for key, entry in list(self.embedded_tags.items()):
             if entry[0] == name:
                 if not isinstance(value, entry[1]):
                     raise TypeError("Values assigned to '{}' must be instances of {}".format(entry[0], entry[1]))
@@ -311,7 +319,7 @@ class IfdData(object):
         raise AttributeError("Invalid attribute '{}'".format(name))
 
     def __delattr__(self, name):
-        for key, entry in self.tags.items():
+        for key, entry in list(self.tags.items()):
             if entry[1] == name:
                 del self[key]
                 break
@@ -319,15 +327,15 @@ class IfdData(object):
             raise AttributeError("Invalid attribute '{}'".format(name))
 
     def __getattr__(self, name):
-        for key, entry in self.tags.items():
+        for key, entry in list(self.tags.items()):
             if entry[1] == name:
                 x = self[key]
                 if x is None:
                     raise AttributeError
                 return x
-        for key, entry in self.embedded_tags.items():
+        for key, entry in list(self.embedded_tags.items()):
             if entry[0] == name:
-                if self.has_key(key):
+                if key in self:
                     return self[key]
                 else:
                     if self.mode == "rw":
@@ -347,7 +355,7 @@ class IfdData(object):
         for entry in self.entries:
             if key == entry[0]:
                 if entry[1] == ASCII and not entry[2] is None:
-                    return entry[2].strip('\0')
+                    return bstrip(entry[2])
                 else:
                     return entry[2]
         return None
@@ -430,8 +438,8 @@ class IfdData(object):
                 if exif_type == BYTE or exif_type == UNDEFINED:
                     actual_data = list(the_data)
                 elif exif_type == ASCII:
-                    if the_data[-1] != '\0':
-                        actual_data = the_data + '\0'
+                    if the_data[-1] != b'\0':
+                        actual_data = the_data + b'\0'
                         # raise JpegFile.InvalidFile("ASCII tag '%s' not
                         # NULL-terminated: %s [%s]" % (self.tags.get(tag,
                         # (hex(tag), 0))[0], the_data, map(ord, the_data)))
@@ -453,7 +461,7 @@ class IfdData(object):
                                                             the_data[i*8:
                                                                      i*8+8])))
                 else:
-                    raise "Can't handle this"
+                    raise Exception("Can't handle this")
 
                 if (byte_size > 4):
                     debug("%s" % actual_data)
@@ -521,7 +529,7 @@ class IfdData(object):
                 for i in range(components):
                     actual_data += pack(e + t, *the_data[i].as_tuple())
             else:
-                raise "Can't handle this", exif_type
+                raise Exception("Can't handle this", exif_type)
             if (byte_size) > 4:
                 output_data += actual_data
                 actual_data = pack(e + "I", data_offset)
@@ -549,19 +557,19 @@ class IfdData(object):
 
     def dump(self, f, indent=""):
         """Dump the IFD file"""
-        print >> f, indent + "<--- %s start --->" % self.name
+        print(indent + "<--- %s start --->" % self.name, file=f)
         for entry in self.entries:
             tag, exif_type, data = entry
             if exif_type == ASCII:
-                data = data.strip('\0')
+                data = bstrip(data)
             if (self.isifd(data)):
                 data.dump(f, indent + "    ")
             else:
                 if data and len(data) == 1:
                     data = data[0]
-                print >> f, indent + "  %-40s %s" % \
-                    (self.tags.get(tag, (hex(tag), 0))[0], data)
-        print >> f, indent + "<--- %s end --->" % self.name
+                print(indent + "  %-40s %s" % \
+                    (self.tags.get(tag, (hex(tag), 0))[0], data), file=f)
+        print(indent + "<--- %s end --->" % self.name, file=f)
 
 
 class IfdInterop(IfdData):
@@ -802,7 +810,7 @@ class IfdTIFF(IfdData):
 
     def special_handler(self, tag, data):
         if tag in self.tags and self.tags[tag][1] == "Make":
-            self.exif_file.make = data.strip('\0')
+            self.exif_file.make = bstrip(data)\
 
     def new_gps(self):
         if hasattr(self, 'GPSIFD'):
@@ -861,9 +869,9 @@ class ExifSegment(DefaultSegment):
         """Overloads the DefaultSegment method to parse the data of
         this segment. Can raise InvalidFile if we don't get what we expect."""
         exif = unpack("6s", data[:6])[0]
-        exif = exif.strip('\0')
+        exif = bstrip(exif)
 
-        if (exif != "Exif"):
+        if (exif != b"Exif"):
             raise self.InvalidSegment("Bad Exif Marker. Got <%s>, "
                                       "expecting <Exif>" % exif)
 
@@ -871,9 +879,9 @@ class ExifSegment(DefaultSegment):
         data = None  # Don't need or want data for now on.
 
         self.tiff_endian = tiff_data[:2]
-        if self.tiff_endian == "II":
+        if self.tiff_endian == b"II":
             self.e = "<"
-        elif self.tiff_endian == "MM":
+        elif self.tiff_endian == b"MM":
             self.e = ">"
         else:
             raise JpegFile.InvalidFile("Bad TIFF endian header. Got <%s>, "
@@ -910,7 +918,7 @@ class ExifSegment(DefaultSegment):
             offset = unpack(self.e + "I", tiff_data[start:start+4])[0]
 
     def dump(self, fd):
-        print >> fd, " Section: [ EXIF] Size: %6d" % (len(self.data))
+        print(" Section: [ EXIF] Size: %6d" % (len(self.data)), file=fd)
         for ifd in self.ifds:
             ifd.dump(fd)
 
@@ -1004,7 +1012,7 @@ class JpegFile:
 
     def fromString(str, mode="rw"):
         """Return a new JpegFile object taking data from a string."""
-        return JpegFile(StringIO.StringIO(str), "from buffer", mode=mode)
+        return JpegFile(io.StringIO(str), "from buffer", mode=mode)
     fromString = staticmethod(fromString)
 
     def fromFd(fd, mode="rw"):
@@ -1065,16 +1073,17 @@ class JpegFile:
                     attempt = segment_class(mark, input, data, self.mode)
                     segments.append(attempt)
                     break
-                except DefaultSegment.InvalidSegment:
+                except DefaultSegment.InvalidSegment as e:
                     # It wasn't this one so we try the next type.
                     # DefaultSegment will always work.
+                    print("Cannot build segment: {}".format(str(e)))
                     continue
 
         self._segments = segments
 
     def writeString(self):
         """Write the JpegFile out to a string. Returns a string."""
-        f = StringIO.StringIO()
+        f = io.StringIO()
         self.writeFd(f)
         return f.getvalue()
 
@@ -1093,7 +1102,7 @@ class JpegFile:
     def dump(self, f=sys.stdout):
         """Write out ASCII representation of the file on a given file
         object. Output default to stdout."""
-        print >> f, "<Dump of JPEG %s>" % self.filename
+        print("<Dump of JPEG %s>" % self.filename, file=f)
         for segment in self._segments:
             segment.dump(f)
 
@@ -1175,8 +1184,8 @@ class JpegFile:
                 (1/60.0 * float(min.num) / min.den) + \
                 (1/3600.0 * float(sec.num) / sec.den)
         if not hasattr(self.exif.primary, 'GPSIFD'):
-            raise self.NoSection, "File %s doesn't have a GPS section." % \
-                self.filename
+            raise self.NoSection("File %s doesn't have a GPS section." % \
+                self.filename)
 
         gps = self.exif.primary.GPS
         lat = convert(gps.GPSLatitude)
@@ -1200,7 +1209,7 @@ class JpegFile:
         other = (val - deg) * 60
         minutes = int(other)
         secs = (other - minutes) * 60
-        secs = long(secs * JpegFile.SEC_DEN)
+        secs = int(secs * JpegFile.SEC_DEN)
         return (sign, deg, minutes, secs)
 
     _parse = staticmethod(_parse)
