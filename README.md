@@ -1,3 +1,7 @@
+# Python EXIF parsing for Python 3.x
+
+Update the original pexif to make it work properly under Python 3.x.
+
 # Python EXIF parsing
 
 **pexif** is a Python library for  parsing and more importantly
