@@ -126,16 +126,16 @@ def debug(*debug_string):
         print()
 
 
-def bstrip(b):
+def bstrip(b, eol=False):
     if b:
         index = len(b) - 1
-        while index >= 0 and b[index] != b'\0':
+        while index >= 0 and b[index] == b'\0':
             index -= 1
-        return b[0:index - 1]
+        return b[0:index - (0 if eol else 1)]
     return b
 
 class DefaultSegment:
-    """DefaultSegment represents a particluar segment of a JPEG file.
+    """DefaultSegment represents a particular segment of a JPEG file.
     This class is instantiated by JpegFile when parsing Jpeg files
     and is not intended to be used directly by the programmer. This
     base class is used as a default which doesn't know about the internal
@@ -168,7 +168,7 @@ class DefaultSegment:
         must write out any data in the segment. This shouldn't in general be
         overloaded by subclasses, they should instead override the get_data()
         method."""
-        fd.write('\xff')
+        fd.write(b'\xff')
         fd.write(pack('B', self.marker))
         data = self.get_data()
         fd.write(pack('>H', len(data) + 2))
@@ -298,7 +298,7 @@ class IfdData(object):
         """extra_ifd_data method can be over-ridden by subclasses
         to specially handle conversion of the Python Ifd representation
         back into a byte stream."""
-        return ""
+        return b""
 
     def has_key(self, key):
         return self[key] is not None
@@ -346,6 +346,21 @@ class IfdData(object):
                         raise AttributeError
         raise AttributeError("%s not found.. %s" % (name, self.embedded_tags))
 
+    def __contains__(self, item):
+        if isinstance(item, str):
+            for entry in self.tags.values():
+                if item == entry[1]:
+                    return True
+            for entry in self.embedded_tags.values():
+                if item == entry[0]:
+                    return True
+            return False
+        else:
+            for entry in self.entries:
+                if item == entry[0]:
+                    return True
+            return False
+
     def __getitem__(self, key):
         if isinstance(key, str):
             try:
@@ -355,7 +370,7 @@ class IfdData(object):
         for entry in self.entries:
             if key == entry[0]:
                 if entry[1] == ASCII and not entry[2] is None:
-                    return bstrip(entry[2])
+                    return bstrip(entry[2], eol=True)
                 else:
                     return entry[2]
         return None
@@ -481,7 +496,7 @@ class IfdData(object):
 
     def getdata(self, e, offset, last=0):
         data_offset = offset+2+len(self.entries)*12+4
-        output_data = ""
+        output_data = bytes()
 
         out_entries = []
 
@@ -514,7 +529,7 @@ class IfdData(object):
                 byte_size = exif_type_size(exif_type) * components
 
             if exif_type == BYTE or exif_type == UNDEFINED:
-                actual_data = "".join(the_data)
+                actual_data = bytes(the_data)
             elif exif_type == ASCII:
                 actual_data = the_data
             elif exif_type == SHORT:
@@ -525,7 +540,7 @@ class IfdData(object):
                 actual_data = pack(e + ("i" * components), *the_data)
             elif exif_type == RATIONAL or exif_type == SRATIONAL:
                 t = 'II' if exif_type == RATIONAL else 'ii'
-                actual_data = ""
+                actual_data = b""
                 for i in range(components):
                     actual_data += pack(e + t, *the_data[i].as_tuple())
             else:
@@ -535,7 +550,7 @@ class IfdData(object):
                 actual_data = pack(e + "I", data_offset)
                 data_offset += byte_size
             else:
-                actual_data = actual_data + '\0' * (4 - len(actual_data))
+                actual_data = actual_data + b'\0' * (4 - len(actual_data))
             out_entries.append((tag, magic_type,
                                 magic_components, actual_data))
 
@@ -561,7 +576,7 @@ class IfdData(object):
         for entry in self.entries:
             tag, exif_type, data = entry
             if exif_type == ASCII:
-                data = bstrip(data)
+                data = bstrip(data, eol=True)
             if (self.isifd(data)):
                 data.dump(f, indent + "    ")
             else:
@@ -923,7 +938,7 @@ class ExifSegment(DefaultSegment):
             ifd.dump(fd)
 
     def get_data(self):
-        ifds_data = ""
+        ifds_data = b""
         next_offset = 8
         for ifd in self.ifds:
             debug("OUT IFD")
@@ -931,8 +946,8 @@ class ExifSegment(DefaultSegment):
                                                 ifd == self.ifds[-1])
             ifds_data += new_data
 
-        data = ""
-        data += "Exif\0\0"
+        data = b""
+        data += bytes("Exif\0\0", encoding="ascii")
         data += self.tiff_endian
         data += pack(self.e + "HI", 42, 8)
         data += ifds_data

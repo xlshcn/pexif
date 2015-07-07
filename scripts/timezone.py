@@ -9,7 +9,7 @@ Requires Benno's pexif library: http://code.google.com/p/pexif/
 """
 
 import sys
-from pexif import JpegFile, EXIF_OFFSET
+from pexif import JpegFile, TIFF_OFFSET
 from datetime import timedelta, datetime
 from optparse import OptionParser
 
@@ -30,14 +30,16 @@ def parse_args():
 
 def adjust_time(primary, delta):
     def adjust_tag(timetag, delta):
-        dt = datetime.strptime(timetag, TIME_FORMAT)
+        time_format = str(timetag, encoding="ascii").strip("\0")
+        print("'{}'".format(timetag))
+        dt = datetime.strptime(time_format, TIME_FORMAT)
         dt += delta
         return dt.strftime(TIME_FORMAT)
 
     if primary.DateTime:
         primary.DateTime = adjust_tag(primary.DateTime, delta)
 
-    embedded = primary[EXIF_OFFSET]
+    embedded = primary[TIFF_OFFSET]
     if embedded:
         for tag in DATETIME_EMBEDDED_TAGS:
             if embedded[tag]:
@@ -52,14 +54,14 @@ def main():
             jf = JpegFile.fromFile(fname)
         except (IOError, JpegFile.InvalidFile):
             type, value, traceback = sys.exc_info()
-            print >> sys.stderr, "Error reading %s:" % fname, value
+            print("Error reading %s:" % fname, value, file=sys.stderr)
             return 1
 
         exif = jf.get_exif()
         if exif:
             primary = exif.get_primary()
         if exif is None or primary is None:
-            print >> sys.stderr, "%s has no EXIF tag, skipping" % fname
+            print("%s has no EXIF tag, skipping" % fname, file=sys.stderr)
             continue
 
         adjust_time(primary, delta)
@@ -68,7 +70,7 @@ def main():
             jf.writeFile(fname)
         except IOError:
             type, value, traceback = sys.exc_info()
-            print >> sys.stderr, "Error saving %s:" % fname, value
+            print("Error saving %s:" % fname, value, file=sys.stderr)
             return 1
 
     return 0
