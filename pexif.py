@@ -98,7 +98,7 @@ import sys
 from struct import unpack, pack
 
 MAX_HEADER_SIZE = 64 * 1024
-DELIM = 0xff
+DELIMITER = 0xff
 EOI = 0xd9
 SOI_MARKER = b'\xff\xd8'
 EOI_MARKER = b'\xff\xd9'
@@ -108,7 +108,7 @@ TIFF_TAG = 0x2a
 
 DEBUG = 0
 
-# By default, if we find a makernote with an unknown format, we
+# By default, if we find a maker note with an unknown format, we
 # simply skip over it. In some cases, it makes sense to raise a
 # real error.
 #
@@ -126,15 +126,16 @@ def debug(*debug_string):
         print()
 
 
-def bstrip(b, eol=False):
+def bytes_strip(b, keep_eos=False):
     if b:
         index = len(b) - 1
         while index >= 0 and b[index] == b'\0':
             index -= 1
-        return b[0:index - (0 if eol else 1)]
+        return b[0:index - (0 if keep_eos else 1)]
     return b
 
-class DefaultSegment:
+
+class DefaultSegment(object):
     """DefaultSegment represents a particular segment of a JPEG file.
     This class is instantiated by JpegFile when parsing Jpeg files
     and is not intended to be used directly by the programmer. This
@@ -155,7 +156,7 @@ class DefaultSegment:
         self.fd = fd
         self.code = jpeg_markers.get(self.marker, ('Unknown-{}'.format(self.marker), None))[0]
         assert mode in ["rw", "ro"]
-        if self.data is not None:
+        if self.data:
             self.parse_data(data)
 
     class InvalidSegment(Exception):
@@ -188,8 +189,10 @@ class DefaultSegment:
         """This is called by JpegFile.dump() to output a human readable
         representation of the segment. Subclasses should overload this to provide
         extra information."""
-        print(" Section: [%5s] Size: %6d" % \
-            (jpeg_markers[self.marker][0], len(self.data)), file=fd)
+        print("Section: [{:>5}] Size: {:6}".format(
+            jpeg_markers[self.marker][0],
+            len(self.data)),
+            file=fd)
 
 
 class StartOfScanSegment(DefaultSegment):
@@ -199,35 +202,37 @@ class StartOfScanSegment(DefaultSegment):
     are created by JpegFile and it should not be subclassed.
     """
     def __init__(self, marker, fd, data, mode):
-        DefaultSegment.__init__(self, marker, fd, data, mode)
+        super(StartOfScanSegment, self).__init__(marker, fd, data, mode)
         # For SOS we also pull out the actual data
-        img_data = fd.read()
+        image_data = fd.read()
 
         # Usually the EOI marker will be at the end of the file,
         # optimise for this case
-        if img_data[-2:] == EOI_MARKER:
+        if image_data[-2:] == EOI_MARKER:
             remaining = 2
         else:
             # We need to search
-            for i in range(len(img_data) - 2):
-                if img_data[i:i + 2] == EOI_MARKER:
+            for i in range(len(image_data) - 2):
+                if image_data[i:i + 2] == EOI_MARKER:
                     break
             else:
                 raise JpegFile.InvalidFile("Unable to find EOI marker.")
-            remaining = len(img_data) - i
+            remaining = len(image_data) - i
 
-        self.img_data = img_data[:-remaining]
+        self.image_data = image_data[:-remaining]
         fd.seek(-remaining, 1)
 
     def write(self, fd):
         """Write segment data to a given file object"""
-        DefaultSegment.write(self, fd)
-        fd.write(self.img_data)
+        super(StartOfScanSegment, self).write(fd)
+        fd.write(self.image_data)
 
     def dump(self, fd):
         """Dump as ascii readable data to a given file object"""
-        print(" Section: [  SOS] Size: %6d Image data size: %6d" % \
-            (len(self.data), len(self.img_data)), file=fd)
+        print("Section: [  SOS] Size: {:6} Image data size: {:6}".format(
+            len(self.data),
+            len(self.image_data)),
+            file=fd)
 
 
 class ExifType:
@@ -268,11 +273,11 @@ class Rational:
 
     def __repr__(self):
         """Return a string representation of the fraction."""
-        return "%s / %s" % (self.num, self.den)
+        return "{} / {}".format(self.num, self.den)
 
     def as_tuple(self):
         """Return the fraction a numerator, denominator tuple."""
-        return (self.num, self.den)
+        return self.num, self.den
 
 
 class IfdData(object):
@@ -283,13 +288,13 @@ class IfdData(object):
     embedded_tags = {}
 
     def special_handler(self, tag, data):
-        """special_handler method can be over-ridden by subclasses
+        """special_handler method can be overridden by subclasses
         to specially handle the conversion of tags from raw format
         into Python data types."""
         pass
 
     def ifd_handler(self, data):
-        """ifd_handler method can be over-ridden by subclasses to
+        """ifd_handler method can be overridden by subclasses to
         specially handle conversion of the Ifd as a whole into a
         suitable python representation."""
         pass
@@ -298,10 +303,7 @@ class IfdData(object):
         """extra_ifd_data method can be over-ridden by subclasses
         to specially handle conversion of the Python Ifd representation
         back into a byte stream."""
-        return b""
-
-    def has_key(self, key):
-        return self[key] is not None
+        return bytes()
 
     def __setattr__(self, name, value):
         for key, entry in list(self.tags.items()):
@@ -370,7 +372,7 @@ class IfdData(object):
         for entry in self.entries:
             if key == entry[0]:
                 if entry[1] == ASCII and not entry[2] is None:
-                    return bstrip(entry[2], eol=True)
+                    return bytes_strip(entry[2], keep_eos=True)
                 else:
                     return entry[2]
         return None
@@ -394,7 +396,7 @@ class IfdData(object):
             raise Exception(msg.format(key, self.tags[key]))
         if self.tags[key][2] == ASCII:
             if value is not None and not value.endswith('\0'):
-                value = value + '\0'
+                value += '\0'
         for i in range(len(self.entries)):
             if key == self.entries[i][0]:
                 found = 1
@@ -417,99 +419,95 @@ class IfdData(object):
         object.__setattr__(self, 'e', e)
         object.__setattr__(self, 'entries', [])
 
-        if data is None:
+        if not data:
             return
 
-        num_entries = unpack(e + 'H', data[offset:offset+2])[0]
-        next = unpack(e + "I", data[offset+2+12*num_entries:
-                                    offset+2+12*num_entries+4])[0]
+        num_entries = unpack(e + 'H', data[offset: offset + 2])[0]
+        next = unpack(e + "I", data[offset + 2 + 12 * num_entries: offset + 2 + 12 * num_entries + 4])[0]
         debug("OFFSET %s - %s" % (offset, next))
 
         for i in range(num_entries):
-            start = (i * 12) + 2 + offset
+            start = offset + 2 + 12 * i
             debug("START: ", start)
-            entry = unpack(e + "HHII", data[start:start+12])
-            tag, exif_type, components, the_data = entry
+            # IFD Structure
+            # Bytes 0-1  Tag
+            # Bytes 2-3  Type
+            # Bytes 4-7  Count
+            # Bytes 8-11 Value Offset
+            entry = unpack(e + "HHII", data[start: start + 12])
+            tag, exif_type, components, value_offset = entry
 
             debug("%s %s %s %s %s" % (hex(tag), exif_type,
                                       exif_type_size(exif_type), components,
-                                      the_data))
+                                      value_offset))
             byte_size = exif_type_size(exif_type) * components
 
             if tag in self.embedded_tags:
                 try:
-                    actual_data = self.embedded_tags[tag][1](e, the_data, exif_file, self.mode, data)
+                    value = self.embedded_tags[tag][1](e, value_offset, exif_file, self.mode, data)
                 except JpegFile.SkipTag as exc:
                     # If the tag couldn't be parsed, and raised 'SkipTag'
                     # then we just continue.
                     continue
             else:
+                # If the value fits in 4 bytes, the value self is recorded.
+                # If the value is smaller than 4 bytes, the value is stored in the 4-bytes area starting from the left.
+                # If the value is larger than 4 bytes, the field stores the offset from the start of the TIFF header to
+                # the position where the value itself is recorded.
                 if byte_size > 4:
-                    debug(" ...offset %s" % the_data)
-                    the_data = data[the_data:the_data+byte_size]
+                    debug(" ...offset %s" % value_offset)
+                    bytes_value = data[value_offset: value_offset + byte_size]
                 else:
-                    the_data = data[start+8:start+8+byte_size]
+                    bytes_value = data[start + 8: start + 8 + byte_size]
 
                 if exif_type == BYTE or exif_type == UNDEFINED:
-                    actual_data = list(the_data)
+                    value = list(bytes_value)
                 elif exif_type == ASCII:
-                    if the_data[-1] != b'\0':
-                        actual_data = the_data + b'\0'
-                        # raise JpegFile.InvalidFile("ASCII tag '%s' not
-                        # NULL-terminated: %s [%s]" % (self.tags.get(tag,
-                        # (hex(tag), 0))[0], the_data, map(ord, the_data)))
-                        # print "ASCII tag '%s' not NULL-terminated:
-                        # %s [%s]" % (self.tags.get(tag, (hex(tag), 0))[0],
-                        # the_data, map(ord, the_data))
-                    actual_data = the_data
+                    value = bytes_value
                 elif exif_type == SHORT:
-                    actual_data = list(unpack(e + ("H" * components), the_data))
+                    value = list(unpack(e + ("H" * components), bytes_value))
                 elif exif_type == LONG:
-                    actual_data = list(unpack(e + ("I" * components), the_data))
+                    value = list(unpack(e + ("I" * components), bytes_value))
                 elif exif_type == SLONG:
-                    actual_data = list(unpack(e + ("i" * components), the_data))
+                    value = list(unpack(e + ("i" * components), bytes_value))
                 elif exif_type == RATIONAL or exif_type == SRATIONAL:
-                    t = 'II' if exif_type == RATIONAL else 'ii'
-                    actual_data = []
-                    for i in range(components):
-                        actual_data.append(Rational(*unpack(e + t,
-                                                            the_data[i*8:
-                                                                     i*8+8])))
+                    value = [Rational(*unpack(e + ("II" if exif_type == RATIONAL else "ii"),
+                                              bytes_value[c * 8: c * 8 + 8])) for c in range(components)]
                 else:
-                    raise Exception("Can't handle this")
+                    raise Exception("Can't handle exif type: {:h}".format(exif_type))
 
-                if (byte_size > 4):
-                    debug("%s" % actual_data)
+                if byte_size > 4:
+                    debug("%s" % value)
 
-                self.special_handler(tag, actual_data)
-            entry = (tag, exif_type, actual_data)
+                self.special_handler(tag, value)
+            entry = (tag, exif_type, value)
             self.entries.append(entry)
 
             debug("%-40s %-10s %6d %s" % (self.tags.get(tag, (hex(tag), 0))[0],
                                           ExifType.lookup[exif_type],
-                                          components, actual_data))
+                                          components, value))
         self.ifd_handler(data)
 
-    def isifd(self, other):
+    def is_ifd(self, other):
         """Return true if other is an IFD"""
         return issubclass(other.__class__, IfdData)
 
-    def getdata(self, e, offset, last=0):
+    def get_data(self, e, offset, last=0):
         data_offset = offset+2+len(self.entries)*12+4
         output_data = bytes()
 
         out_entries = []
 
-        # Add any specifc data for the particular type
+        # Add any specific data for the particular type
         extra_data = self.extra_ifd_data(data_offset)
         data_offset += len(extra_data)
         output_data += extra_data
 
         for tag, exif_type, the_data in self.entries:
             magic_type = exif_type
-            if (self.isifd(the_data)):
+            if self.is_ifd(the_data):
                 debug("-> Magic..")
-                sub_data, next_offset = the_data.getdata(e, data_offset, 1)
+                sub_data, next_offset = the_data.get_data(e, data_offset, 1)
                 the_data = [data_offset]
                 debug("<- Magic", next_offset, data_offset, len(sub_data),
                       data_offset + len(sub_data))
@@ -576,8 +574,8 @@ class IfdData(object):
         for entry in self.entries:
             tag, exif_type, data = entry
             if exif_type == ASCII:
-                data = bstrip(data, eol=True)
-            if (self.isifd(data)):
+                data = bytes_strip(data, keep_eos=True)
+            if (self.is_ifd(data)):
                 data.dump(f, indent + "    ")
             else:
                 if data and len(data) == 1:
@@ -634,10 +632,10 @@ class FujiIFD(IfdData):
         }
     name = "FujiFilm"
 
-    def getdata(self, e, offset, last=0):
+    def get_data(self, e, offset, last=0):
         pre_data = "FUJIFILM"
         pre_data += pack("<I", 12)
-        data, next_offset = IfdData.getdata(self, e, 12, last)
+        data, next_offset = IfdData.get_data(self, e, 12, last)
         return pre_data + data, next_offset + offset
 
 
@@ -825,7 +823,7 @@ class IfdTIFF(IfdData):
 
     def special_handler(self, tag, data):
         if tag in self.tags and self.tags[tag][1] == "Make":
-            self.exif_file.make = bstrip(data)\
+            self.exif_file.make = bytes_strip(data)\
 
     def new_gps(self):
         if hasattr(self, 'GPSIFD'):
@@ -884,7 +882,7 @@ class ExifSegment(DefaultSegment):
         """Overloads the DefaultSegment method to parse the data of
         this segment. Can raise InvalidFile if we don't get what we expect."""
         exif = unpack("6s", data[:6])[0]
-        exif = bstrip(exif)
+        exif = bytes_strip(exif)
 
         if (exif != b"Exif"):
             raise self.InvalidSegment("Bad Exif Marker. Got <%s>, "
@@ -942,7 +940,7 @@ class ExifSegment(DefaultSegment):
         next_offset = 8
         for ifd in self.ifds:
             debug("OUT IFD")
-            new_data, next_offset = ifd.getdata(self.e, next_offset,
+            new_data, next_offset = ifd.get_data(self.e, next_offset,
                                                 ifd == self.ifds[-1])
             ifds_data += new_data
 
@@ -981,17 +979,17 @@ class ExifSegment(DefaultSegment):
     primary = property(_get_property)
 
 jpeg_markers = {
-    0xc0: ("SOF0", []),
-    0xc2: ("SOF2", []),
-    0xc4: ("DHT", []),
+    0xc0: ("SOF0", [], "Frame Header"),
+    0xc2: ("SOF2", [], "Frame Header"),
+    0xc4: ("DHT", [], "Huffman Table"),
 
-    0xda: ("SOS", [StartOfScanSegment]),
-    0xdb: ("DQT", []),
-    0xdd: ("DRI", []),
+    0xda: ("SOS", [StartOfScanSegment], "Scan Data (Compressed)"),
+    0xdb: ("DQT", [], "Quantization Table"),
+    0xdd: ("DRI", [], "Restart Interval"),
 
     0xe0: ("APP0", []),
-    0xe1: ("APP1", [ExifSegment]),
-    0xe2: ("APP2", []),
+    0xe1: ("APP1", [ExifSegment], "Exif Attribute Information"),
+    0xe2: ("APP2", [], "Flashpix Extension Data"),
     0xe3: ("APP3", []),
     0xe4: ("APP4", []),
     0xe5: ("APP5", []),
@@ -1068,10 +1066,10 @@ class JpegFile:
         while 1:
             head = input.read(2)
             delim, mark = unpack(">BB", head)
-            if (delim != DELIM):
+            if (delim != DELIMITER):
                 raise self.InvalidFile("Error, expecting delimiter. "
                                        "Got <%s> should be <%s>" %
-                                       (delim, DELIM))
+                                       (delim, DELIMITER))
             if mark == EOI:
                 # Hit end of image marker, game-over!
                 break
