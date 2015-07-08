@@ -414,10 +414,10 @@ class IfdData(object):
         return
 
     def __init__(self, e, offset, exif_file, mode, data=None):
-        object.__setattr__(self, 'exif_file', exif_file)
-        object.__setattr__(self, 'mode', mode)
-        object.__setattr__(self, 'e', e)
-        object.__setattr__(self, 'entries', [])
+        object.__setattr__(self, "exif_file", exif_file)
+        object.__setattr__(self, "mode", mode)
+        object.__setattr__(self, "e", e)
+        object.__setattr__(self, "entries", [])
 
         if not data:
             return
@@ -493,7 +493,7 @@ class IfdData(object):
         return issubclass(other.__class__, IfdData)
 
     def get_data(self, e, offset, last=0):
-        data_offset = offset+2+len(self.entries)*12+4
+        data_offset = offset + 2 + len(self.entries) * 12 + 4
         output_data = bytes()
 
         out_entries = []
@@ -503,12 +503,12 @@ class IfdData(object):
         data_offset += len(extra_data)
         output_data += extra_data
 
-        for tag, exif_type, the_data in self.entries:
+        for tag, exif_type, tag_data in self.entries:
             magic_type = exif_type
-            if self.is_ifd(the_data):
+            if self.is_ifd(tag_data):
                 debug("-> Magic..")
-                sub_data, next_offset = the_data.get_data(e, data_offset, 1)
-                the_data = [data_offset]
+                sub_data, next_offset = tag_data.get_data(e, data_offset, 1)
+                tag_data = [data_offset]
                 debug("<- Magic", next_offset, data_offset, len(sub_data),
                       data_offset + len(sub_data))
                 data_offset += len(sub_data)
@@ -523,27 +523,27 @@ class IfdData(object):
                 byte_size = 4
                 components = 1
             else:
-                magic_components = components = len(the_data)
+                magic_components = components = len(tag_data)
                 byte_size = exif_type_size(exif_type) * components
 
             if exif_type == BYTE or exif_type == UNDEFINED:
-                actual_data = bytes(the_data)
+                actual_data = bytes(tag_data)
             elif exif_type == ASCII:
-                actual_data = the_data
+                actual_data = tag_data if not isinstance(tag_data, str) else bytes(tag_data, encoding="ascii")
             elif exif_type == SHORT:
-                actual_data = pack(e + ("H" * components), *the_data)
+                actual_data = pack(e + ("H" * components), *tag_data)
             elif exif_type == LONG:
-                actual_data = pack(e + ("I" * components), *the_data)
+                actual_data = pack(e + ("I" * components), *tag_data)
             elif exif_type == SLONG:
-                actual_data = pack(e + ("i" * components), *the_data)
+                actual_data = pack(e + ("i" * components), *tag_data)
             elif exif_type == RATIONAL or exif_type == SRATIONAL:
                 t = 'II' if exif_type == RATIONAL else 'ii'
-                actual_data = b""
+                actual_data = bytes()
                 for i in range(components):
-                    actual_data += pack(e + t, *the_data[i].as_tuple())
+                    actual_data += pack(e + t, *tag_data[i].as_tuple())
             else:
                 raise Exception("Can't handle this", exif_type)
-            if (byte_size) > 4:
+            if byte_size > 4:
                 output_data += actual_data
                 actual_data = pack(e + "I", data_offset)
                 data_offset += byte_size
@@ -876,15 +876,14 @@ class ExifSegment(DefaultSegment):
         self.ifds = []
         self.e = '<'
         self.tiff_endian = 'II'
-        DefaultSegment.__init__(self, marker, fd, data, mode)
+        super(ExifSegment, self).__init__(marker, fd, data, mode)
 
     def parse_data(self, data):
         """Overloads the DefaultSegment method to parse the data of
         this segment. Can raise InvalidFile if we don't get what we expect."""
-        exif = unpack("6s", data[:6])[0]
-        exif = bytes_strip(exif)
+        exif = unpack("6s", data[:TIFF_OFFSET])[0]
 
-        if (exif != b"Exif"):
+        if (exif != b"Exif\0\0"):
             raise self.InvalidSegment("Bad Exif Marker. Got <%s>, "
                                       "expecting <Exif>" % exif)
 
@@ -917,26 +916,26 @@ class ExifSegment(DefaultSegment):
 
         while offset:
             count += 1
-            num_entries = unpack(self.e + 'H', tiff_data[offset:offset+2])[0]
-            start = 2 + offset + (num_entries*12)
-            if (count == 1):
+            num_entries = unpack(self.e + 'H', tiff_data[offset: offset + 2])[0]
+            start = 2 + offset + (num_entries * 12)
+            if count == 1:
                 ifd = IfdTIFF(self.e, offset, self, self.mode, tiff_data)
-            elif (count == 2):
+            elif count == 2:
                 ifd = IfdThumbnail(self.e, offset, self, self.mode, tiff_data)
             else:
-                raise JpegFile.InvalidFile()
+                raise JpegFile.InvalidFile("Too more entries.")
             self.ifds.append(ifd)
 
             # Get next offset
             offset = unpack(self.e + "I", tiff_data[start:start+4])[0]
 
     def dump(self, fd):
-        print(" Section: [ EXIF] Size: %6d" % (len(self.data)), file=fd)
+        print("Section: [ EXIF] Size: %6d" % (len(self.data)), file=fd)
         for ifd in self.ifds:
             ifd.dump(fd)
 
     def get_data(self):
-        ifds_data = b""
+        ifds_data = bytes()
         next_offset = 8
         for ifd in self.ifds:
             debug("OUT IFD")
@@ -944,10 +943,9 @@ class ExifSegment(DefaultSegment):
                                                 ifd == self.ifds[-1])
             ifds_data += new_data
 
-        data = b""
-        data += bytes("Exif\0\0", encoding="ascii")
+        data = b"Exif\0\0"
         data += self.tiff_endian
-        data += pack(self.e + "HI", 42, 8)
+        data += pack(self.e + "HI", TIFF_TAG, 8)
         data += ifds_data
 
         return data
@@ -967,7 +965,8 @@ class ExifSegment(DefaultSegment):
             else:
                 return None
 
-    def _get_property(self):
+    @property
+    def primary(self):
         if self.mode == "rw":
             return self.get_primary(True)
         else:
@@ -976,16 +975,39 @@ class ExifSegment(DefaultSegment):
                 raise AttributeError
             return primary
 
-    primary = property(_get_property)
 
 jpeg_markers = {
-    0xc0: ("SOF0", [], "Frame Header"),
-    0xc2: ("SOF2", [], "Frame Header"),
-    0xc4: ("DHT", [], "Huffman Table"),
+    0x01: ("TEM", [], "For Temporary Use in Arithmetic Coding"),
 
-    0xda: ("SOS", [StartOfScanSegment], "Scan Data (Compressed)"),
-    0xdb: ("DQT", [], "Quantization Table"),
-    0xdd: ("DRI", [], "Restart Interval"),
+    # 0x02-0xbf: RES, Reserved
+
+    0xc0: ("SOF0", [], "Baseline DCT"),
+    0xc1: ("SOF1", [], "Extended Sequential DCT"),
+    0xc2: ("SOF2", [], "Progressive DCT"),
+    0xc3: ("SOF3", [], "Spatial (Sequential) Loss-less"),
+    0xc4: ("DHT", [], "Huffman Table"),
+    0xc5: ("SOF5", [], "Differential Sequential DCT"),
+    0xc6: ("SOF6", [], "Differential Progressive DCT"),
+    0xc7: ("SOF7", [], "Differential Spatial Loss-less"),
+    0xc8: ("JPG", [], "Reserved for JPEG Extension"),
+    0xc9: ("SOF9", [], "Extended Sequential DCT"),
+    0xca: ("SOF10", [], "Progressive DCT"),
+    0xcb: ("SOF11", [], "Spatial (Sequential) Loss-less"),
+    0xcc: ("DAC", [], "Define Arithmetic Conditioning Table"),
+    0xcd: ("SOF13", [], "Differential Sequential DCT"),
+    0xce: ("SOF14", [], "Differential Progressive DCT"),
+    0xcf: ("SOF15", [], "Differential Spatial Loss-less"),
+
+    # 0xd0-0xd7 RSTm Restart with Modulo 8 Counter m
+
+    0xd8: ("SOI", [], "Start of Image"),
+    0xd9: ("EOI", [], "End of Image"),
+    0xda: ("SOS", [StartOfScanSegment], "Start of Scan"),
+    0xdb: ("DQT", [], "Define Quantization Table(s)"),
+    0xdc: ("DNL", [], "Define Number of Lines"),
+    0xdd: ("DRI", [], "Define Restart Interval"),
+    0xde: ("DHP", [], "Define Hierarchical Progression"),
+    0xdf: ("EXP", [], "Expand Reference Image(s)"),
 
     0xe0: ("APP0", []),
     0xe1: ("APP1", [ExifSegment], "Exif Attribute Information"),
@@ -1004,34 +1026,36 @@ jpeg_markers = {
     0xee: ("APP14", []),
     0xef: ("APP15", []),
 
-    0xfe: ("COM", []),
-    }
+    # 0xf0-0xfd JPGn Reserved for JPEG Extension
+
+    0xfe: ("COM", [], "Comment"),
+}
 
 APP1 = 0xe1
 
 
-class JpegFile:
+class JpegFile(object):
     """JpegFile object. You should create this using one of the static methods
     fromFile, fromString or fromFd. The JpegFile object allows you to examine and
     modify the contents of the file. To write out the data use one of the methods
     writeFile, writeString or writeFd. To get an ASCII dump of the data in a file
     use the dump method."""
 
+    @staticmethod
     def fromFile(filename, mode="rw"):
         """Return a new JpegFile object from a given filename."""
         with open(filename, "rb") as f:
             return JpegFile(f, filename=filename, mode=mode)
-    fromFile = staticmethod(fromFile)
 
+    @staticmethod
     def fromString(str, mode="rw"):
         """Return a new JpegFile object taking data from a string."""
         return JpegFile(io.StringIO(str), "from buffer", mode=mode)
-    fromString = staticmethod(fromString)
 
+    @staticmethod
     def fromFd(fd, mode="rw"):
         """Return a new JpegFile object taking data from a file object."""
         return JpegFile(fd, "fd <%d>" % fd.fileno(), mode=mode)
-    fromFd = staticmethod(fromFd)
 
     class SkipTag(Exception):
         """This exception is raised if a give tag should be skipped."""
@@ -1043,6 +1067,10 @@ class JpegFile:
 
     class NoSection(Exception):
         """This exception is raised if a section is unable to be found."""
+        pass
+
+    class RWError(Exception):
+        """This exception is raised if a RW mode is required."""
         pass
 
     def __init__(self, input, filename=None, mode="rw"):
@@ -1063,19 +1091,20 @@ class JpegFile:
 
         # Now go through and find all the blocks of data
         segments = []
-        while 1:
-            head = input.read(2)
-            delim, mark = unpack(">BB", head)
-            if (delim != DELIMITER):
+        while True:
+            head_bytes = input.read(2)
+            delimiter, mark = unpack(">BB", head_bytes)
+            if (delimiter != DELIMITER):
                 raise self.InvalidFile("Error, expecting delimiter. "
                                        "Got <%s> should be <%s>" %
-                                       (delim, DELIMITER))
+                                       (delimiter, DELIMITER))
             if mark == EOI:
                 # Hit end of image marker, game-over!
                 break
-            head2 = input.read(2)
-            size = unpack(">H", head2)[0]
-            data = input.read(size-2)
+            size_bytes = input.read(2)
+            size = unpack(">H", size_bytes)[0]
+            data_bytes = input.read(size - 2)
+
             possible_segment_classes = jpeg_markers[mark][1] + [DefaultSegment]
             # Try and find a valid segment class to handle
             # this data
@@ -1083,7 +1112,7 @@ class JpegFile:
                 try:
                     # Note: Segment class may modify the input file
                     # descriptor. This is expected.
-                    attempt = segment_class(mark, input, data, self.mode)
+                    attempt = segment_class(mark, input, data_bytes, self.mode)
                     segments.append(attempt)
                     break
                 except DefaultSegment.InvalidSegment as e:
@@ -1102,8 +1131,8 @@ class JpegFile:
 
     def writeFile(self, filename):
         """Write the JpegFile out to a file named filename."""
-        output = open(filename, "wb")
-        self.writeFd(output)
+        with open(filename, "wb") as f:
+            self.writeFd(f)
 
     def writeFd(self, output):
         """Write the JpegFile out on the file object output."""
@@ -1151,7 +1180,8 @@ class JpegFile:
         else:
             self._segments.insert(0, new_exif)
 
-    def _get_exif(self):
+    @property
+    def exif(self):
         """Exif Attribute property"""
         if self.mode == "rw":
             return self.get_exif(True)
@@ -1160,8 +1190,6 @@ class JpegFile:
             if exif is None:
                 raise AttributeError
             return exif
-
-    exif = property(_get_exif)
 
     def remove_metadata(self, paranoid=True):
         """Remove all metadata segments from the image.
@@ -1230,7 +1258,7 @@ class JpegFile:
     def set_geo(self, lat, lng):
         """Set the GeoLocation to a given lat and lng"""
         if self.mode != "rw":
-            raise RWError
+            raise JpegFile.RWError
 
         gps = self.exif.primary.GPS
 
