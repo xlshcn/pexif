@@ -875,7 +875,7 @@ class ExifSegment(DefaultSegment):
     def __init__(self, marker, fd, data, mode):
         self.ifds = []
         self.e = '<'
-        self.tiff_endian = 'II'
+        self.tiff_endian = b'II'
         super(ExifSegment, self).__init__(marker, fd, data, mode)
 
     def parse_data(self, data):
